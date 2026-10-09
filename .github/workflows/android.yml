@@ -1,3 +1,4 @@
+
 name: Build BUSSID Controller APK
 
 on:
@@ -20,12 +21,16 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
       - name: Create Android project
+        shell: bash
         run: |
           mkdir -p app/src/main/java/com/suryathepg/bussidcontroller
 
@@ -42,6 +47,7 @@ jobs:
               repositories {
                   google()
                   mavenCentral()
+                  maven { url 'https://jitpack.io' }
               }
           }
           rootProject.name = "BUSSIDJoystickController"
@@ -113,7 +119,6 @@ jobs:
           import android.content.Context;
           import android.content.Intent;
           import android.content.IntentFilter;
-          import android.hardware.usb.UsbDevice;
           import android.hardware.usb.UsbDeviceConnection;
           import android.hardware.usb.UsbManager;
           import android.os.Bundle;
@@ -128,7 +133,195 @@ jobs:
           import com.hoho.android.usbserial.driver.UsbSerialProber;
 
           import java.io.IOException;
-          import java
+
+          public class MainActivity extends Activity {
+              private static final String ACTION_USB_PERMISSION =
+                  "com.suryathepg.bussidcontroller.USB_PERMISSION";
+
+              private UsbManager usbManager;
+              private UsbSerialDriver driver;
+              private UsbSerialPort port;
+              private UsbDeviceConnection connection;
+              private TextView output;
+              private volatile boolean reading = false;
+              private Thread readThread;
+              private boolean receiverRegistered = false;
+
+              private final BroadcastReceiver permissionReceiver =
+                  new BroadcastReceiver() {
+                      @Override
+                      public void onReceive(Context context, Intent intent) {
+                          if (ACTION_USB_PERMISSION.equals(intent.getAction())) {
+                              if (usbManager.hasPermission(driver.getDevice())) {
+                                  openSerialPort();
+                              } else {
+                                  log("USB permission denied.");
+                              }
+                          }
+                      }
+                  };
+
+              @Override
+              public void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  usbManager = (UsbManager) getSystemService(
+                      Context.USB_SERVICE);
+
+                  LinearLayout layout = new LinearLayout(this);
+                  layout.setOrientation(LinearLayout.VERTICAL);
+                  layout.setPadding(24, 24, 24, 24);
+
+                  TextView heading = new TextView(this);
+                  heading.setText("BUSSID Nano USB Test");
+                  heading.setTextSize(22);
+                  layout.addView(heading);
+
+                  Button connectButton = new Button(this);
+                  connectButton.setText("Connect Arduino");
+                  layout.addView(connectButton);
+
+                  Button disconnectButton = new Button(this);
+                  disconnectButton.setText("Disconnect");
+                  layout.addView(disconnectButton);
+
+                  output = new TextView(this);
+                  output.setTextSize(16);
+                  output.setText("Connect your Arduino Nano by USB OTG.");
+                  ScrollView scroll = new ScrollView(this);
+                  scroll.addView(output);
+                  layout.addView(scroll, new LinearLayout.LayoutParams(
+                      ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+
+                  setContentView(layout);
+
+                  registerReceiver(permissionReceiver,
+                      new IntentFilter(ACTION_USB_PERMISSION));
+                  receiverRegistered = true;
+
+                  connectButton.setOnClickListener(v -> connectArduino());
+                  disconnectButton.setOnClickListener(v -> disconnect());
+              }
+
+              private void connectArduino() {
+                  try {
+                      java.util.List<UsbSerialDriver> drivers =
+                          UsbSerialProber.getDefaultProber()
+                              .findAllDrivers(usbManager);
+
+                      if (drivers.isEmpty()) {
+                          log("No compatible USB serial device found. "
+                              + "Check your OTG cable.");
+                          return;
+                      }
+
+                      driver = drivers.get(0);
+
+                      if (usbManager.hasPermission(driver.getDevice())) {
+                          openSerialPort();
+                      } else {
+                          PendingIntent permissionIntent =
+                              PendingIntent.getBroadcast(
+                                  this, 0,
+                                  new Intent(ACTION_USB_PERMISSION)
+                                      .setPackage(getPackageName()),
+                                  PendingIntent.FLAG_UPDATE_CURRENT
+                                      | PendingIntent.FLAG_IMMUTABLE);
+
+                          usbManager.requestPermission(
+                              driver.getDevice(), permissionIntent);
+                          log("Waiting for USB permission...");
+                      }
+                  } catch (Exception e) {
+                      log("USB error: " + e.getMessage());
+                  }
+              }
+
+              private void openSerialPort() {
+                  try {
+                      connection = usbManager.openDevice(driver.getDevice());
+
+                      if (connection == null) {
+                          log("Could not open USB device.");
+                          return;
+                      }
+
+                      port = driver.getPorts().get(0);
+                      port.open(connection);
+                      port.setParameters(
+                          9600, 8,
+                          UsbSerialPort.STOPBITS_1,
+                          UsbSerialPort.PARITY_NONE);
+
+                      log("Connected at 9600 baud. Move the joystick.");
+                      startReading();
+                  } catch (Exception e) {
+                      log("Serial connection failed: " + e.getMessage());
+                      disconnect();
+                  }
+              }
+
+              private void startReading() {
+                  reading = true;
+                  readThread = new Thread(() -> {
+                      byte[] buffer = new byte[128];
+
+                      while (reading) {
+                          try {
+                              int count = port.read(buffer, 500);
+                              if (count > 0) {
+                                  String text = new String(
+                                      buffer, 0, count,
+                                      java.nio.charset.StandardCharsets.UTF_8);
+                                  runOnUiThread(() -> log(text.trim()));
+                              }
+                          } catch (IOException e) {
+                              if (reading) {
+                                  runOnUiThread(() ->
+                                      log("Read error: " + e.getMessage()));
+                              }
+                              break;
+                          }
+                      }
+                  });
+                  readThread.start();
+              }
+
+              private void log(String message) {
+                  output.append("\n" + message);
+              }
+
+              private void disconnect() {
+                  reading = false;
+
+                  try {
+                      if (port != null) {
+                          port.close();
+                      }
+                  } catch (Exception ignored) {
+                  }
+
+                  try {
+                      if (connection != null) {
+                          connection.close();
+                      }
+                  } catch (Exception ignored) {
+                  }
+
+                  port = null;
+                  connection = null;
+                  log("Disconnected.");
+              }
+
+              @Override
+              protected void onDestroy() {
+                  disconnect();
+                  if (receiverRegistered) {
+                      unregisterReceiver(permissionReceiver);
+                  }
+                  super.onDestroy();
+              }
+          }
+          EOF
 
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug
@@ -144,4 +337,4 @@ jobs:
           name: bussid-nano-controller-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-
+          retention-days: 7
