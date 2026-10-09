@@ -1,0 +1,131 @@
+name: Build BUSSID Controller APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Create Android project
+        run: |
+          mkdir -p app/src/main/java/com/suryathepg/bussidcontroller
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "BUSSIDJoystickController"
+          include(":app")
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.suryathepg.bussidcontroller'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.suryathepg.bussidcontroller'
+                  minSdk 23
+                  targetSdk 28
+                  versionCode 1
+                  versionName '1.0'
+              }
+          }
+
+          dependencies {
+              implementation 'com.github.mik3y:usb-serial-for-android:3.8.1'
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-feature
+                  android:name="android.hardware.usb.host"
+                  android:required="true" />
+
+              <application
+                  android:allowBackup="false"
+                  android:label="BUSSID Nano Controller"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/suryathepg/bussidcontroller/MainActivity.java <<'EOF'
+          package com.suryathepg.bussidcontroller;
+
+          import android.app.Activity;
+          import android.app.PendingIntent;
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.IntentFilter;
+          import android.hardware.usb.UsbDevice;
+          import android.hardware.usb.UsbDeviceConnection;
+          import android.hardware.usb.UsbManager;
+          import android.os.Bundle;
+          import android.view.ViewGroup;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+
+          import com.hoho.android.usbserial.driver.UsbSerialDriver;
+          import com.hoho.android.usbserial.driver.UsbSerialPort;
+          import com.hoho.android.usbserial.driver.UsbSerialProber;
+
+          import java.io.IOException;
+          import java
